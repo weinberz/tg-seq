@@ -1,0 +1,196 @@
+---
+title: "TGs with DOR?"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(knitr)
+library(tidyverse)
+library(DT)
+library(Seurat)
+```
+
+## ORs in the Trigeminal Ganglia
+
+[Nguyen et al. 2017](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5619795/) conducted a single-cell genomics study investigating the trigeminal ganglia. I was curious - can we learn anything about DOR expressing cells from this dataset? For starters, let's take a look at the raw data:
+
+```{r}
+tidied_tg <- read.csv('tidied_tg.csv', colClasses = c('NULL', NA, NA, NA))
+tidied_tg %>%
+  sample_n(6) %>%
+  kable(caption = "An example of the entries contained in the dataset, showing 6 samples of genes, cell barcodes, and read counts.")
+```
+
+These data are comprised of gene names, the cells in which those genes were find (identified by a DNA barcode), and the number of times that gene was detected in a given cell (its count). Given that, we can check for the frequency of opioid receptors in the dataset:
+
+```{r}
+opioid_rs <- c('Oprm1', 'Oprd1', 'Oprk1', 'Oprl1')
+tidied_tg %>% 
+  filter(GENE %in% opioid_rs) %>% 
+  group_by(GENE) %>%
+  summarize(reads = sum(count), num_cells = length(unique(cell))) %>%
+  mutate(read_freq = reads/sum(tidied_tg$count), 
+         cell_freq = num_cells/length(unique(tidied_tg$cell))) %>%
+  kable(caption = "Frequency of the 4 canonical opioid receptors in the dataset.")
+```
+
+Unfortunately, opioid receptors make up a tiny portion of the dataset - no more than 4% of cells for any receptor, with Oprd1 the least frequently expressed. However, we can gain a lot of information about what genes are expressed in these specific cells. For example, we can look for genes that are only expressed in cells with opioid receptors:
+```{r}
+or_cells <- tidied_tg %>%
+  filter((GENE %in% opioid_rs)) %>%
+  pull(cell)
+
+or_genes <- tidied_tg %>%
+  filter((cell %in% or_cells)) %>%
+  group_by(GENE) %>%
+  summarize(sum(count)) %>%
+  pull(GENE)
+  
+other_genes <- tidied_tg %>%
+  filter(!(cell %in% or_cells)) %>%
+  group_by(GENE) %>%
+  summarize(sum(count)) %>%
+  pull(GENE)
+
+or_only_genes <- setdiff(or_genes, other_genes)
+tidied_tg %>%
+  filter((GENE %in% or_only_genes) & !(GENE %in% opioid_rs)) %>%
+  group_by(GENE) %>%
+  summarize(reads = sum(count)) %>%
+  arrange(desc(reads)) %>%
+  kable(caption = "Genes exclusively expressed in cells that also express opioid receptors.")
+```
+In total, there are 379 genes that are only expressed in opioid receptor containing cells.
+
+Nick Ryba (the study's last author), notes the following caveat about these low-expressing cells in their paper:
+
+> From our experience just about any gene that is well represented in the single cell data is expressed at high level and can be detected in appropriate cell populations using ISH; the exceptions are genes that are rapidly upregulated by stress/injury (dissociation and isolation of neurons for sequencing). So Fos (not detected in the ganglion) or Gal (low level expression) are high in the sc-data. Obviously genes that seem to dropout like Oprm1 and Oprd1 might just be expressed at a moderate level: basically I would estimate that a normal neuron has >500,000 transcripts and on average we are capturing about 1,500 in the data (i.e. only ~0.2% of total transcripts are sequenced). In addition, Dropseq only sequences a region of the 3’-end (everything barcoded is tethered to the polyA tail); if by chance a gene has a 3’-end that lacks complexity/individuality it will also be under-represented (the sequence needs to match one genomic location and only one gene model from the database); similarly if a gene has a short polyA tail, it might be under-sampled because it fails to be captured. In addition, some transcripts have been suggested to be rapidly translocated to axon termini; those might also be missing. Finally, the data are by no means unbiased; large diameter neurons are under-sampled and by contrast nociceptors over-represented. My guess is that with opioid receptors, it’s a bit of several of these that account for its sparseness; I doubt they are very highly expressed but they might not be as low as the data suggest.
+
+So with that in mind, what can we learn about cells that express DOR?
+
+## DOR-associated genes in the TG
+
+First, let's see which genes are expressed exclusively in DOR-expressing cells comapred to the rest of the sample:
+
+```{r}
+dor_cells <- tidied_tg %>%
+  filter((GENE == 'Oprd1')) %>%
+  pull(cell)
+
+dor_genes <- tidied_tg %>%
+  filter((cell %in% dor_cells)) %>%
+  group_by(GENE) %>%
+  summarize(sum(count)) %>%
+  pull(GENE)
+  
+other_genes <- tidied_tg %>%
+  filter(!(cell %in% dor_cells)) %>%
+  group_by(GENE) %>%
+  summarize(sum(count)) %>%
+  pull(GENE)
+
+dor_only_genes <- setdiff(dor_genes, other_genes)
+tidied_tg %>%
+  filter((GENE %in% dor_only_genes) & !(GENE == 'Oprd1')) %>%
+  group_by(GENE) %>%
+  summarize(reads = sum(count)) %>%
+  arrange(desc(reads)) %>%
+  kable(caption = "Genes only expressed in DOR-expressing cells.")
+```
+None of these genes have very many reads in DOR cells. Maybe there are genes highly expressed in DOR-cells, even if they're not unique to DOR cells? Here we look at the top hits for genes expressed in DOR cells:
+```{r}
+tidied_tg %>%
+  filter(GENE %in% dor_genes) %>%
+  group_by(GENE) %>% summarize(reads = sum(count)) %>%
+  arrange(desc(reads)) %>%
+  kable(caption = "Genes expressed in DOR-expressing cells, sorted by the number of total reads.")
+```
+So, a lot of neuronal genes. These probably won't give specific labels. It might also be interesting to look at genes that are NEVER expressed in DOR-expressing cells:
+```{r}
+dor_excluded_genes <- setdiff(other_genes, dor_genes)
+tidied_tg %>%
+  filter((GENE %in% dor_excluded_genes) & !(GENE == 'Oprd1')) %>%
+  group_by(GENE) %>%
+  summarize(reads = sum(count)) %>%
+  arrange(desc(reads)) %>%
+  kable(caption = "Genes that are never expressed in DOR cells, sorted by reads.")
+```
+This is great, because we know that VIP is a useful neuronal marker, AND it's expressed at a high frequency in the dataset. **VIP should mark non-DOR cells exclusively**. But we still don't have a DOR-specific marker.
+
+In the end, what we're most curious about is genes that are enriched in DOR-expressing cells over the global cell population. To get this, we use a normalized likelihood ratio. The likelihood ratio is calculated as: $\frac{gene_{DOR}}{reads_{DOR}} /{\frac{gene_{total}}{reads_{total}}}$. For our _total_ variable, we can select either from the entire dataset, or exclusively cells not expressing DOR. We also want to use a logarithmic transformation, as these data will be dramatically left-clustered. Below, the log-likelihood ratio for enrichment in DOR cells vs. the total dataset is listed as likelihood_total, and enrichment in DOR cells vs. non-DOR cells is listed as likelihood_xdor. _Note: I've filtered out genes only expressed in DOR cells from this list_
+
+```{r}
+dor_counts <- filter(tidied_tg, (cell %in% dor_cells)) %>% 
+  summarize(total=sum(count)) %>% pull(total)
+xdor_counts <- filter(tidied_tg, !(cell %in% dor_cells)) %>% 
+  summarize(total=sum(count)) %>% pull(total)
+total_counts <- tidied_tg %>% summarize(total=sum(count)) %>% pull(total)
+
+dor_freq.df <- tidied_tg %>% filter((GENE %in% dor_genes) & 
+                                      !(GENE %in% dor_only_genes) &
+                                      (cell %in% dor_cells)) %>%
+  group_by(GENE) %>% summarize(dor_reads=sum(count)) %>%
+  mutate(dor_freq=dor_reads/dor_counts)
+
+xdor_freq.df <- tidied_tg %>% filter((GENE %in% dor_genes) &
+                                       !(GENE %in% dor_only_genes) & 
+                                       !(cell %in% dor_cells)) %>%
+  group_by(GENE) %>% summarize(xdor_reads=sum(count)) %>%
+  mutate(xdor_freq=xdor_reads/xdor_counts)
+
+total_freq.df <- tidied_tg %>% filter((GENE %in% dor_genes) & 
+                                        !(GENE %in% dor_only_genes))  %>%
+  group_by(GENE) %>% summarize(total_reads=sum(count)) %>%
+  mutate(total_freq=total_reads/total_counts)
+
+dor_enriched <- left_join(
+  left_join(dor_freq.df, xdor_freq.df, by=c("GENE")),
+  total_freq.df, by=c("GENE")) %>%
+  mutate(likelihood_total = log(dor_freq/total_freq), 
+         likelihood_xdor = log(dor_freq/xdor_freq)) %>%
+  arrange(desc(likelihood_total))
+
+kable(dor_enriched, caption = "Genes enriched in DOR cells.")
+```
+
+The distribution of these likelihood ratios looks like:
+```{r echo=FALSE, fig.cap="The distribution of both likelihood metrics plotted as a histogram. Both populations have roughly normal distribution centered around 0."}
+lt_mean = mean(dor_enriched$likelihood_total)
+lt_sd = sd(dor_enriched$likelihood_total)
+lx_mean = mean(dor_enriched$likelihood_xdor)
+lx_sd = sd(dor_enriched$likelihood_xdor)
+
+dor_enriched %>% 
+  select(GENE, likelihood_xdor, likelihood_total) %>% 
+  gather(measure, ratio, c(likelihood_xdor, likelihood_total)) %>% 
+  ggplot(aes(x=ratio, fill=measure)) + 
+  geom_histogram(bins=100, color='black')
+```
+
+Selecting a cutoff for where genes become interesting is  arbitrary, but to inform ourselves as to what might be meaningful here, we can look at distribution summary statistics. The mean and standard deviation give us an idea of where we should be looking for interesting genes:
+
+* total likelihood: `r lt_mean` ± `r lt_sd`
+* DOR-exclusive likelihood: `r lx_mean` ± `r lx_sd`
+
+With these  in mind, let's glimpse a few DOR genes we know are functionally associated with DOR:
+```{r}
+genes_of_interest <- c('Gnai1','Gnai2','Gnai3','Gnao1',
+                       'Pten','Pik3c2a', 'Rhoq', 'Rapgef1',
+                       'Ntrk1', 'Ntrk2', 'Gga1', 'Ap3d1')
+
+dor_enriched %>%
+  filter(GENE %in% genes_of_interest) %>%
+  select(GENE, dor_reads, total_reads, likelihood_total, likelihood_xdor) %>%
+  kable(caption = "Some DOR-related genes and their log-likelihood in DOR-expressing cells")
+```
+All of these genes are within one standard deviation of the distribution mean, 
+
+You can search the entire list of genes below:
+```{r warning=FALSE}
+dor_enriched %>%
+  select(GENE, dor_reads, total_reads, likelihood_total, likelihood_xdor) %>%
+  datatable()
+```
