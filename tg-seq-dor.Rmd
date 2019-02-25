@@ -1,27 +1,28 @@
 ---
 title: "TGs with DOR?"
-output:
-  html_document:
-    df_print: paged
+output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+library(DT)
 library(knitr)
 library(tidyverse)
-library(DT)
 library(Seurat)
+options(DT.rownames = FALSE,
+        DT.options = list(lengthChange = FALSE,
+                          pageLength = 6))
 ```
 
 ## ORs in the Trigeminal Ganglia
 
 [Nguyen et al. 2017](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5619795/) conducted a single-cell genomics study investigating the trigeminal ganglia. I was curious - can we learn anything about DOR expressing cells from this dataset? For starters, let's take a look at the raw data:
 
-```{r}
+```{r cache=TRUE}
 tidied_tg <- read.csv('tidied_tg.csv', colClasses = c('NULL', NA, NA, NA))
 tidied_tg %>%
   sample_n(6) %>%
-  kable(caption = "An example of the entries contained in the dataset, showing 6 samples of genes, cell barcodes, and read counts.")
+  datatable(rownames = FALSE, options = list(searching = FALSE), caption = "An example of the entries contained in the dataset, showing 6 samples of genes, cell barcodes, and read counts.")
 ```
 
 These data are comprised of gene names, the cells in which those genes were find (identified by a DNA barcode), and the number of times that gene was detected in a given cell (its count). Given that, we can check for the frequency of opioid receptors in the dataset:
@@ -34,7 +35,7 @@ tidied_tg %>%
   summarize(reads = sum(count), num_cells = length(unique(cell))) %>%
   mutate(read_freq = reads/sum(tidied_tg$count), 
          cell_freq = num_cells/length(unique(tidied_tg$cell))) %>%
-  kable(caption = "Frequency of the 4 canonical opioid receptors in the dataset.")
+  datatable(rownames = FALSE, options = list(searching = FALSE), caption = "Frequency of the 4 canonical opioid receptors in the dataset.")
 ```
 
 Unfortunately, opioid receptors make up a tiny portion of the dataset - no more than 4% of cells for any receptor, with Oprd1 the least frequently expressed. However, we can gain a lot of information about what genes are expressed in these specific cells. For example, we can look for genes that are only expressed in cells with opioid receptors:
@@ -61,8 +62,9 @@ tidied_tg %>%
   group_by(GENE) %>%
   summarize(reads = sum(count)) %>%
   arrange(desc(reads)) %>%
-  kable(caption = "Genes exclusively expressed in cells that also express opioid receptors.")
+  datatable(rownames = FALSE, caption = "Genes exclusively expressed in cells that also express opioid receptors.")
 ```
+
 In total, there are 379 genes that are only expressed in opioid receptor containing cells.
 
 Nick Ryba (the study's last author), notes the following caveat about these low-expressing cells in their paper:
@@ -98,16 +100,18 @@ tidied_tg %>%
   group_by(GENE) %>%
   summarize(reads = sum(count)) %>%
   arrange(desc(reads)) %>%
-  kable(caption = "Genes only expressed in DOR-expressing cells.")
+  datatable(rownames = FALSE, caption = "Genes only expressed in DOR-expressing cells.")
 ```
+
 None of these genes have very many reads in DOR cells. Maybe there are genes highly expressed in DOR-cells, even if they're not unique to DOR cells? Here we look at the top hits for genes expressed in DOR cells:
 ```{r}
 tidied_tg %>%
   filter(GENE %in% dor_genes) %>%
   group_by(GENE) %>% summarize(reads = sum(count)) %>%
   arrange(desc(reads)) %>%
-  kable(caption = "Genes expressed in DOR-expressing cells, sorted by the number of total reads.")
+  datatable(rownames = FALSE, caption = "Genes expressed in DOR-expressing cells, sorted by the number of total reads.")
 ```
+
 So, a lot of neuronal genes. These probably won't give specific labels. It might also be interesting to look at genes that are NEVER expressed in DOR-expressing cells:
 ```{r}
 dor_excluded_genes <- setdiff(other_genes, dor_genes)
@@ -116,11 +120,12 @@ tidied_tg %>%
   group_by(GENE) %>%
   summarize(reads = sum(count)) %>%
   arrange(desc(reads)) %>%
-  kable(caption = "Genes that are never expressed in DOR cells, sorted by reads.")
+  datatable(rownames = FALSE, caption = "Genes that are never expressed in DOR cells, sorted by reads.")
 ```
+
 This is great, because we know that VIP is a useful neuronal marker, AND it's expressed at a high frequency in the dataset. **VIP should mark non-DOR cells exclusively**. But we still don't have a DOR-specific marker.
 
-In the end, what we're most curious about is genes that are enriched in DOR-expressing cells over the global cell population. To get this, we use a normalized likelihood ratio. The likelihood ratio is calculated as: $\frac{gene_{DOR}}{reads_{DOR}} /{\frac{gene_{total}}{reads_{total}}}$. For our _total_ variable, we can select either from the entire dataset, or exclusively cells not expressing DOR. We also want to use a logarithmic transformation, as these data will be dramatically left-clustered. Below, the log-likelihood ratio for enrichment in DOR cells vs. the total dataset is listed as likelihood_total, and enrichment in DOR cells vs. non-DOR cells is listed as likelihood_xdor. _Note: I've filtered out genes only expressed in DOR cells from this list_
+In the end, what we're most curious about is genes that are enriched in DOR-expressing cells over the global cell population. To get this, we use a normalized likelihood ratio. The likelihood ratio is calculated as: $\frac{gene_{DOR}}{reads_{DOR}} /{\frac{gene_{total}}{reads_{total}}}$. For our _total_ variable, we can select either from the entire dataset, or exclusively cells not expressing DOR. We also want to use a logarithmic transformation, as these data will be dramatically left-clustered. Below, the log-likelihood ratio for enrichment in DOR cells vs. the total dataset is listed as likelihood_total, and enrichment in DOR cells vs. non-DOR cells is listed as likelihood_xdor. I've filtered out genes only expressed in DOR cells from this list as they are obviously the most enriched genes. 
 
 ```{r}
 dor_counts <- filter(tidied_tg, (cell %in% dor_cells)) %>% 
@@ -152,11 +157,9 @@ dor_enriched <- left_join(
   mutate(likelihood_total = log(dor_freq/total_freq), 
          likelihood_xdor = log(dor_freq/xdor_freq)) %>%
   arrange(desc(likelihood_total))
-
-kable(dor_enriched, caption = "Genes enriched in DOR cells.")
 ```
 
-The distribution of these likelihood ratios looks like:
+In order to determine what magnitude of enrichment we should focus on when looking for interesting genes, we can look at these likelihood ratios presented as a histogram. These distributions appear roughly normally distributed:
 ```{r echo=FALSE, fig.cap="The distribution of both likelihood metrics plotted as a histogram. Both populations have roughly normal distribution centered around 0."}
 lt_mean = mean(dor_enriched$likelihood_total)
 lt_sd = sd(dor_enriched$likelihood_total)
@@ -167,7 +170,7 @@ dor_enriched %>%
   select(GENE, likelihood_xdor, likelihood_total) %>% 
   gather(measure, ratio, c(likelihood_xdor, likelihood_total)) %>% 
   ggplot(aes(x=ratio, fill=measure)) + 
-  geom_histogram(bins=100, color='black')
+  geom_density(alpha = 0.5)
 ```
 
 Selecting a cutoff for where genes become interesting is  arbitrary, but to inform ourselves as to what might be meaningful here, we can look at distribution summary statistics. The mean and standard deviation give us an idea of where we should be looking for interesting genes:
@@ -175,7 +178,7 @@ Selecting a cutoff for where genes become interesting is  arbitrary, but to info
 * total likelihood: `r lt_mean` ± `r lt_sd`
 * DOR-exclusive likelihood: `r lx_mean` ± `r lx_sd`
 
-With these  in mind, let's glimpse a few DOR genes we know are functionally associated with DOR:
+With these in mind, let's glimpse a few DOR genes we know are functionally associated with DOR:
 ```{r}
 genes_of_interest <- c('Gnai1','Gnai2','Gnai3','Gnao1',
                        'Pten','Pik3c2a', 'Rhoq', 'Rapgef1',
@@ -184,13 +187,129 @@ genes_of_interest <- c('Gnai1','Gnai2','Gnai3','Gnao1',
 dor_enriched %>%
   filter(GENE %in% genes_of_interest) %>%
   select(GENE, dor_reads, total_reads, likelihood_total, likelihood_xdor) %>%
-  kable(caption = "Some DOR-related genes and their log-likelihood in DOR-expressing cells")
+  datatable(caption = "Some DOR-related genes and their log-likelihood in DOR-expressing cells")
 ```
-All of these genes are within one standard deviation of the distribution mean, 
 
-You can search the entire list of genes below:
+All of these genes are within one standard deviation of the distribution mean, although the trends are as expected for several of them. 
+
+You can search the entire list of enriched genes below:
 ```{r warning=FALSE}
 dor_enriched %>%
   select(GENE, dor_reads, total_reads, likelihood_total, likelihood_xdor) %>%
+  datatable(options = list(lengthChange = TRUE, searching = TRUE), filter = "top")
+```
+
+## DOR in TG Neuronal Subtypes
+```{r cache=TRUE}
+load("tg_object.Robj")
+current.cluster.ids <- levels(ctg_a@ident)
+new.cluster.ids <- c("Trpm8-1", "Trpm8-2", "Calca/Tac1/Trpv1-1", "S100b/Nefh-3", "Cd34", "S100b/Nefh-2", "S100b/Nefh-1", "Calca/Tac1/Trpv1-2", "Calca/Tac1/Trpv1-3", "Calca/Tac1/Trpv1-4", "Itch-1", "Itch-2", "Mrgprd")
+ctg_a@ident <- plyr::mapvalues(x = ctg_a@ident, from = current.cluster.ids, to = new.cluster.ids)
+```
+Nguyen et al. 2017 show that of the above cells, only about 3,500 cells are 'neurons'. This cutoff is made based predominantly on the expression of two neuronal genes: Tubb3 and Scn9a. The authors then clustered these data based on gene expression and found several distinct clusters, which could also be thought of as subtypes of cells. Dr. Ryba provided us with the analyzed neuronal data. We can visualize the clusters they detected:
+```{r}
+g <- TSNEPlot(ctg_a, do.label = TRUE, do.return = TRUE)
+g + theme(legend.position = "none")
+```
+
+
+I've labeled these clusters based on the broad labels used in the original paper - these are all gene names that the clusters express highly. If all were perfect, we would see that all of our DOR-expressing cells cluster within one specific cluster. We can highlight cells expresing our gene of interest in that other plot. Here, I've used both DOR and MOR so that their distributions can be compared:
+```{r}
+FeaturePlot(ctg_a, features.plot = c('Oprd1','Oprm1'), 
+            cols.use = c('gray','blue','red'),
+            overlay = TRUE, do.hover = TRUE,
+            no.legend = FALSE)
+```
+Delta-expressing cells are in blue, Mu-expressing cells in red, everything else in gray. Note that you can hover over every element above to see which cell and cluster is belongs to. Clearly our cells of interest don't cluster very nicely in this plot. This makes sense, given that our receptors are not well represented in the dataset - the clustering above is dominated by genes with much higher expression counts. What if we look at relative expression of our opioid receptors across the clusters?
+```{r}
+DotPlot(ctg_a, genes.plot = c('Oprd1', 'Oprm1'), plot.legend = TRUE)
+```
+This is a bit more enlightening! Based on the descriptions provided in the published data, MOR tends to be expressed in neurons connected to cold-sensation, discriminative touch, nociception, heat sensation, and itch (Trpm8, S100b/Nefh, Calca/Tac1/Trpv1, Trpv1, and itch markers, respectively), while DOR seems enriched in affective C fibers (slow mechanosensation/gentle touch), discriminative touch, itch, and noxious mechanosensation (Cd34, S100b/Nefh, itch markers, and Mrgprd, respectively). There appears to be functional specifalization of these receptors in sensation.
+
+How do our DOR-enriched genes fair? Below is a heatmap of gene expression for the top 150 genes in our DOR-enriched datase. DOR is on the top so you can compare cluster expression:
+```{r}
+dor_neurons <- colnames(ctg_a@data[,ctg_a@data['Oprd1',] > 0])
+
+DoHeatmap(ctg_a, genes.use = c('Oprd1',as.character(dor_enriched %>% arrange(desc(likelihood_total)) %>% filter((row_number() %in% 1:150)) %>% pull(GENE))), use.scaled = TRUE, slim.col.label = TRUE, group.label.rot = TRUE, remove.key = TRUE, group.cex = 8, cex.row = 6)
+```
+Note that many of them are not displayed - it appears that some of the DOR we found in the initial dataset is in cells that were discarded after filtering for neurons. In fact, of the `r length(dor_cells)` cells in the full dataset that contain DOR, `r length(dor_cells) - length(dor_neurons)` are not neurons.
+
+At least by my eye, the genes that jump out the most are Thrsp (a thyroid hormone responsive gene taht might regulate transcription factors) and Hs3st2 (a heparan sulfate transferase), both present in high(er) amounts in a cluster of discriminative touch neurons. Given the lack of conclusively identifying genes, it might be useful to look at markers that are prominent in cluster S100b/Nefh-2 and in Mrgprd. 
+
+#S100b/Nefh1 Cluster
+You can see the top 100 markers for the S100b/Nefh-2 cluster:
+```{r cache = TRUE, results = 'hide', message = FALSE}
+s100b_nefh1_2.markers <- FindMarkers(object = ctg_a, ident.1 = 'S100b/Nefh-2', thresh.use = 0.1, test.use = "roc", only.pos = TRUE)[1:100,]
+
+dor_enriched %>% filter(GENE %in% rownames(s100b_nefh1_2.markers)) %>% arrange(desc(likelihood_total)) %>% select(GENE, dor_reads, likelihood_total) %>% datatable()
+```
+And we can appreciate that the likelihood distribution of these genes is right shifted in DOR-expressing cells.
+```{r}
+dor_enriched %>% mutate(S100b_Nefh1_2 = GENE %in% rownames(s100b_nefh1_2.markers)) %>% arrange(desc(likelihood_total)) %>% ggplot(aes(x = likelihood_total, fill = S100b_Nefh1_2)) + geom_density()
+```
+Given these findings, it would suggest that **PCP4 (a regulator of Calmodulin) might be a useful marker for a sub-population of DOR expressing cells**.
+
+#Mrgprd Cluster
+You can see the top 100 markers for the Mrgprd cluster:
+```{r cache = TRUE, results = 'hide', message = FALSE}
+Mrgprd.markers <- FindMarkers(object = ctg_a, ident.1 = 'Mrgprd', thresh.use = 0.1, test.use = "roc", only.pos = TRUE)[1:100,]
+
+dor_enriched %>% filter(GENE %in% rownames(Mrgprd.markers)) %>% arrange(desc(likelihood_total)) %>% select(GENE, dor_reads, likelihood_total) %>% datatable()
+```
+The likelihood distribution of these genes is even further right shifted in DOR-expressing cells compared to the S100b/Nefh cluster.
+```{r}
+dor_enriched %>% mutate(Mrgprd = GENE %in% rownames(Mrgprd.markers)) %>% arrange(desc(likelihood_total)) %>% ggplot(aes(x = likelihood_total, fill = Mrgprd)) + geom_density()
+```
+Given these findings, it would suggest that **Mrgprd (a regulator of Calmodulin) might be a useful marker for a sub-population of DOR expressing cells**.
+
+##Non-neuronal DOR
+Given that almost 20% of our DOR cells were filtered out using the neuronal filter on the above dataset, this might represent a third prominent population of DOR. Again, we calculate the log likelihood of genes expressed in just those cells vs the rest of the dataset:
+```{r}
+non_neuronal_dor_cells <- setdiff(dor_cells,dor_neurons)
+
+non_neuronal_dor_genes <- tidied_tg %>% 
+  filter(cell %in% non_neuronal_dor_cells) %>%
+  group_by(GENE) %>%
+  pull(GENE) %>%
+  unique()
+
+non_neuronal_dor_counts <- tidied_tg %>%
+  filter(cell %in% non_neuronal_dor_cells) %>%
+  summarize(total = sum(count)) %>%
+  pull(total)
+
+non_neuronal_total_counts <- tidied_tg %>%
+  filter(!(cell %in% colnames(ctg_a@data))) %>%
+  summarize(total = sum(count)) %>%
+  pull(total)
+
+non_neuronal_dor_enriched <- left_join(
+  (tidied_tg %>%
+    filter((GENE %in% non_neuronal_dor_genes) &
+             (cell %in% non_neuronal_dor_cells)) %>%
+    group_by(GENE) %>%
+    summarize(dor_reads = sum(count)) %>%
+    mutate(dor_freq = dor_reads/non_neuronal_dor_counts)),
+  (tidied_tg %>%
+    filter((GENE %in% non_neuronal_dor_genes) &
+             !(cell %in% colnames(ctg_a@data))) %>%
+    group_by(GENE) %>%
+    summarize(total_reads = sum(count)) %>%
+    mutate(total_freq = total_reads/non_neuronal_total_counts)), 
+  by=c("GENE")) %>%
+  mutate(likelihood = log(dor_freq/total_freq))
+
+non_neuronal_dor_enriched %>%
+  arrange(desc(dor_reads)) %>%
+  select(GENE, dor_reads, total_reads, likelihood) %>%
   datatable()
 ```
+Unfortunately, many of these look to be neuronal genes so it's possible this population was erroneously discarded. Not much we can do with these cells.
+
+##Conclusions
+The above data together suggest that DOR could be theoretically positively labeled by Mrgprd and PCP4, and should not colocalize with VIP in the trigeminal ganglia. Furthermore, the above results provide a good list to crosscheck screening results against, as genes enriched in DOR-expressing cells might represent more interesting hits from the HEK screen.
+
+All this is of course with two major caveats:
+
+* DOR is underrepresented in the dataset. This is possibly artifiactual and possibly real. It might be useful to run an in situ to determine the frequency of endogenous DOR in our cultures.
+* Of the two classes of DOR-containing cells we can find, there is yet a 3rd class whose nature we are not able to presently identify.
